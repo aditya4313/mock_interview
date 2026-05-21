@@ -1,31 +1,26 @@
-"use client"
+"use client";
 
 import Webcam from 'react-webcam';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import useSpeechToText from 'react-hook-speech-to-text';
 import { Mic } from 'lucide-react';
 import { toast } from 'sonner';
-import { chatSession } from '@/utils/GeminiAI';
-import { db } from '@/utils/db';
-import { useUser } from '@clerk/nextjs';
-import moment from 'moment';
-import { UserAnswer } from '@/utils/schema';
 
 function RecordAnsSection({ mockinterviewquestion, activequestionindex, interviewdata }) {
   const [useranswer, setuseranswer] = useState('');
-  const { user } = useUser();
   const [loading, setloading] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const useranswerRef = useRef('');
+  const savingRef = useRef(false);
 
   const {
-    error,
-    interimResult,
     isRecording,
     results,
     startSpeechToText,
     stopSpeechToText,
-    setResults
+    setResults,
   } = useSpeechToText({
     continuous: true,
     useLegacyResults: false,
@@ -33,73 +28,108 @@ function RecordAnsSection({ mockinterviewquestion, activequestionindex, intervie
 
   useEffect(() => {
     if (results.length > 0) {
-      setuseranswer(results[results.length - 1].transcript);
+      const transcript = results[results.length - 1].transcript;
+      setuseranswer(transcript);
+      useranswerRef.current = transcript;
     }
   }, [results]);
 
   useEffect(() => {
-    if (!isRecording && useranswer.length > 10) {
-      UpdateUserAnswer();
-    }
-  }, [isRecording, useranswer]);
-  
-  
-  
-  useEffect(() => {
-    // Reset useranswer when a new question is selected
     setuseranswer('');
-  }, [activequestionindex]);
+    useranswerRef.current = '';
+    setSaved(false);
+    savingRef.current = false;
+    setResults([]);
+  }, [activequestionindex, setResults]);
 
-  const StartStopRecording = async () => {
-    if (isRecording) {
-      stopSpeechToText();
-    } else {
-      setuseranswer(''); // Reset useranswer when recording starts
-      startSpeechToText();
+  const saveUserAnswer = async (answerText) => {
+    const trimmed = answerText?.trim();
+    if (!trimmed || trimmed.length <= 10) {
+      toast.error('Answer is too short. Please record at least a few sentences.');
+      return;
     }
-  };
 
-  const UpdateUserAnswer = async () => {
+    const question = mockinterviewquestion?.[activequestionindex];
+    const mockId = interviewdata?.mockId;
+
+    if (!question || !mockId) {
+      toast.error('Interview data is still loading. Please wait.');
+      return;
+    }
+
+    if (savingRef.current) return;
+    savingRef.current = true;
     setloading(true);
 
-    const feedbackPrompt = `Question: ${mockinterviewquestion[activequestionindex]?.question}, User Answer: ${useranswer}, Depending on the question and user answer for the given interview question, please give us a rating for the answer and feedback as areas of improvement if any, in just 3 to 5 lines to improve it in JSON format with rating and feedback fields.`;
-
     try {
-      const result = await chatSession.sendMessage(feedbackPrompt);
-      const mockjsonResp = (await result.response.text()).replace('```json', '').replace('```', '');
-      
-      console.log(mockjsonResp);
-
-      const jsonfeedbackresp = JSON.parse(mockjsonResp);
-
-      const resp = await db.insert(UserAnswer).values({
-        mockIdRef: interviewdata.mockId,
-        question: mockinterviewquestion[activequestionindex].question,
-        correctAns: mockinterviewquestion[activequestionindex].answer,
-        userAns: useranswer,
-        feedback: jsonfeedbackresp.feedback,
-        rating: jsonfeedbackresp.rating,
-        userEmail: user?.primaryEmailAddress?.emailAddress,
-        createdAt: moment().format('DD-MM-YYYY'),
+      const res = await fetch('/api/user-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mockIdRef: mockId,
+          question: question.question,
+          correctAns: question.answer,
+          userAns: trimmed,
+          questionIndex: activequestionindex,
+        }),
       });
 
-      if (resp) {
-        toast.success('User Answer recorded successfully');
-        setResults([]);
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to save your answer.');
+        return;
       }
-    } catch (error) {
-      console.error('Error during UpdateUserAnswer:', error);
-      toast.error('Error while saving your answer, please try again');
-    } finally {
+
+      setSaved(true);
+      toast.success(
+        data.updated
+          ? 'Answer updated successfully'
+          : 'Answer saved successfully'
+      );
       setResults([]);
+    } catch (error) {
+      console.error('Error saving user answer:', error);
+      toast.error('Error while saving your answer. Please try again.');
+    } finally {
+      savingRef.current = false;
       setloading(false);
     }
   };
 
+  useEffect(() => {
+    if (isRecording) return;
+
+    const indexAtStop = activequestionindex;
+    const timer = setTimeout(() => {
+      if (indexAtStop !== activequestionindex) return;
+      const ans = useranswerRef.current;
+      if (ans.trim().length > 10 && !savingRef.current) {
+        saveUserAnswer(ans);
+      }
+    }, 700);
+
+    return () => clearTimeout(timer);
+  }, [isRecording, activequestionindex]);
+
+  const StartStopRecording = () => {
+    if (isRecording) {
+      stopSpeechToText();
+    } else {
+      setuseranswer('');
+      useranswerRef.current = '';
+      setSaved(false);
+      savingRef.current = false;
+      startSpeechToText();
+    }
+  };
+
+  const currentQuestion = mockinterviewquestion?.[activequestionindex];
+
   return (
     <div className='flex flex-col items-center justify-center my-20'>
       <div className='relative bg-black rounded-lg p-5'>
-        <Image src='/webcam.png' width={200} height={200} className='absolute' />
+        <Image src='/webcam.png' width={200} height={200} className='absolute' alt="" />
         <Webcam
           mirrored={true}
           style={{
@@ -110,22 +140,38 @@ function RecordAnsSection({ mockinterviewquestion, activequestionindex, intervie
         />
       </div>
 
-      <Button 
+      <Button
         disabled={loading}
-        variant="outline" 
+        variant="outline"
         className='my-10'
         onClick={StartStopRecording}
       >
         {isRecording ? (
-          <h2 className="text-red-600 flex items-center space-x-2 border-black">
-          <Mic className="w-6 h-6" /> {/* Adjust size as needed */}
-          <span>Stop Recording...</span>
-        </h2> ) : (
+          <span className="text-red-600 flex items-center space-x-2">
+            <Mic className="w-6 h-6" />
+            <span>Stop Recording...</span>
+          </span>
+        ) : (
           'Record Answer'
         )}
       </Button>
-    
-      <Button className="mt-2" onClick={() => console.log(useranswer)}>Show User Answer</Button>
+
+      {useranswer.length > 0 && (
+        <div className="w-full max-w-lg p-4 border rounded-lg bg-secondary/50 text-sm">
+          <p className="font-semibold mb-1">Your answer {saved ? '(saved)' : ''}:</p>
+          <p className="text-muted-foreground">{useranswer}</p>
+        </div>
+      )}
+
+      {loading && (
+        <p className="text-sm text-primary mt-2">Saving answer and generating feedback...</p>
+      )}
+
+      {!loading && saved && currentQuestion && (
+        <p className="text-sm text-green-600 mt-2">
+          Saved for: Question #{activequestionindex + 1}
+        </p>
+      )}
     </div>
   );
 }

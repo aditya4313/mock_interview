@@ -1,7 +1,11 @@
 import { Lightbulb, Volume2 } from 'lucide-react';
 import React from 'react';
 
-function Questionsection({ mockinterviewquestion, activequestionindex }) {
+function Questionsection({
+  mockinterviewquestion,
+  activequestionindex,
+  setactivequestionindex,
+}) {
   const textToSpeech = (text) => {
     if ('speechSynthesis' in window) {
       const speech = new SpeechSynthesisUtterance(text);
@@ -18,14 +22,14 @@ function Questionsection({ mockinterviewquestion, activequestionindex }) {
           {Array.isArray(mockinterviewquestion) &&
             mockinterviewquestion.map((question, index) => (
               <h2
-              className={`p-2 bg-secondary rounded-full text-xs md:text-sm text-center cursor-pointer ${
-                activequestionindex === index ? 'bg-blue-900 text-white' : ''
-              }`}
-              key={index}
-              onClick={() => handleQuestionClick(index)}
-            >
-              Question #{index + 1}
-            </h2>
+                className={`p-2 bg-secondary rounded-full text-xs md:text-sm text-center cursor-pointer ${
+                  activequestionindex === index ? 'bg-blue-900 text-white' : ''
+                }`}
+                key={index}
+                onClick={() => setactivequestionindex(index)}
+              >
+                Question #{index + 1}
+              </h2>
             ))}
         </div>
         {mockinterviewquestion[activequestionindex] && (
